@@ -45,3 +45,5 @@ Luego visita `http://localhost:3000`.
 - Asteroides se parten en fragmentos más pequeños al ser destruidos
 - Partículas de explosión al destruir asteroides
 - **Estrella fugaz**: 50% de probabilidad por mapa; si aparece, lo hace entre los segundos 10 y 20 entrando desde un borde aleatorio. Recorre una trayectoria elíptica con envolvimiento de bordes, deja una estela de partículas inofensiva que dura 2 segundos y se destruye con un solo disparo (1000 puntos)
+- **Power-up de velocidad**: aumenta temporalmente la velocidad de la nave durante 12 segundos
+- **Power-up de escudo**: protege a la nave durante un máximo de 20 segundos o hasta absorber 2 impactos. Cada asteroide que choque contra el escudo se destruye sin otorgar puntos ni dividirse; la nave no recibe daño.
