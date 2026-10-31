@@ -58,6 +58,8 @@ class Bullet {
 }
 
 // ── Power-up de velocidad ────────────────────────────────────────────────────
+const SPEED_POWER_DURATION = 12;   // segundos
+
 class SpeedPowerUp {
   constructor(x, y) {
     this.x = x;
@@ -107,6 +109,9 @@ const RADII  = [0, 16, 30, 50];   // por tamaño 1, 2, 3
 const SPEEDS = [0, 85, 55, 32];   // velocidad base por tamaño
 const POINTS = [0, 100, 50, 20];  // puntos por tamaño
 
+const TRAIL_LIFE     = 2;     // segundos de vida de la estela
+const TRAIL_INTERVAL = 0.035; // separación entre partículas de la estela
+
 class Asteroid {
   constructor(x, y, size = 3) {
     this.x    = x;
@@ -114,6 +119,10 @@ class Asteroid {
     this.size = size;
     this.radius = RADII[size];
     this.dead = false;
+    this.points = POINTS[size];
+    this.powerUpChance = [0, 0.02, 0.015, 0.008][size];
+    this.explosionCount = size * 5;
+    this.isBonus = false;
 
     const angle = rand(0, Math.PI * 2);
     const speed = SPEEDS[size] + rand(-15, 15);
@@ -158,6 +167,145 @@ class Asteroid {
     for (let i = 1; i < this.verts.length; i++)
       ctx.lineTo(this.verts[i][0], this.verts[i][1]);
     ctx.closePath();
+    ctx.stroke();
+    ctx.restore();
+  }
+}
+
+// ── Estrella fugaz ────────────────────────────────────────────────────────────
+
+// Punto de entrada sobre un borde aleatorio, con dirección hacia el interior.
+function randomEdgeSpawn() {
+  const edge   = randInt(0, 3);
+  const margin = 40;
+  const EPS    = 0.5;   // evita que wrap(W) o wrap(H) cambien de borde
+  let x, y, baseAngle;
+
+  if (edge === 0) {           // superior
+    x = rand(margin, W - margin);
+    y = 0;
+    baseAngle = Math.PI / 2;
+  } else if (edge === 1) {    // derecho
+    x = W - EPS;
+    y = rand(margin, H - margin);
+    baseAngle = Math.PI;
+  } else if (edge === 2) {    // inferior
+    x = rand(margin, W - margin);
+    y = H - EPS;
+    baseAngle = -Math.PI / 2;
+  } else {                    // izquierdo
+    x = 0;
+    y = rand(margin, H - margin);
+    baseAngle = 0;
+  }
+
+  return { x, y, angle: baseAngle + rand(-0.4, 0.4) };
+}
+
+const STAR_LIFETIME = 10;   // segundos antes de desaparecer si no es destruida
+const STAR_FADE     = 3;    // segundos finales en los que se desvanece
+
+class ShootingStar extends Asteroid {
+  constructor() {
+    // La estrella aparece desde un borde, evitando hacerlo encima de la nave.
+    let spawn = randomEdgeSpawn();
+    let tries = 0;
+    while (ship && Math.hypot(spawn.x - ship.x, spawn.y - ship.y) < 130 && tries++ < 32) {
+      spawn = randomEdgeSpawn();
+    }
+
+    // Dirección de entrada (e) y su perpendicular (n).
+    const ex = Math.cos(spawn.angle);
+    const ey = Math.sin(spawn.angle);
+    const nx = -ey;
+    const ny = ex;
+
+    // Semiejes de la elipse: uno perpendicular a la entrada y otro en la entrada.
+    const ax = rand(320, 460);
+    const ay = ax * rand(0.82, 0.95);
+    const cx = spawn.x - ax * nx;
+    const cy = spawn.y - ax * ny;
+
+    super(spawn.x, spawn.y, 1);
+
+    this.isBonus = true;
+    this.points  = POINTS[1] * 10;
+    this.powerUpChance = 0;
+    this.explosionCount = 14;
+
+    this.cx    = cx;
+    this.cy    = cy;
+    this.ax    = ax;
+    this.ay    = ay;
+    this.ex    = ex;
+    this.ey    = ey;
+    this.nx    = nx;
+    this.ny    = ny;
+    this.phase = 0;
+
+    // Velocidad tangencial media = el doble de un asteroide pequeño.
+    const smallSpeed = SPEEDS[1] + rand(-15, 15);
+    this.omega = (smallSpeed * 2) / ((ax + ay) / 2);
+    this.emitTimer = 0;
+    this.ttl = STAR_LIFETIME;
+
+    this.syncPosition();
+  }
+
+  syncPosition() {
+    const cos = Math.cos(this.phase);
+    const sin = Math.sin(this.phase);
+    this.x = wrap(this.cx + this.ax * cos * this.nx + this.ay * sin * this.ex, W);
+    this.y = wrap(this.cy + this.ax * cos * this.ny + this.ay * sin * this.ey, H);
+  }
+
+  update(dt) {
+    this.ttl -= dt;
+    if (this.ttl <= 0) {
+      this.dead = true;
+      return;
+    }
+
+    this.phase += this.omega * dt;
+    this.syncPosition();
+    this.rot += this.rotSpeed * dt;
+
+    // Dirección tangente a la elipse, usada para orientar la estela.
+    const cos = Math.cos(this.phase);
+    const sin = Math.sin(this.phase);
+    const tx  = -this.ax * sin * this.nx + this.ay * cos * this.ex;
+    const ty  = -this.ax * sin * this.ny + this.ay * cos * this.ey;
+    const len = Math.hypot(tx, ty) || 1;
+
+    this.emitTimer -= dt;
+    while (this.emitTimer <= 0) {
+      particles.push(new TrailParticle(this.x, this.y, tx / len, ty / len));
+      this.emitTimer += TRAIL_INTERVAL;
+    }
+  }
+
+  split() { return []; }
+
+  draw() {
+    // En los últimos segundos se desvanece conservando su color.
+    const alpha = this.ttl < STAR_FADE ? Math.max(0, this.ttl / STAR_FADE) : 1;
+
+    ctx.save();
+    ctx.globalAlpha = alpha;
+    ctx.translate(this.x, this.y);
+    ctx.rotate(this.rot);
+    ctx.strokeStyle = '#ffd166';
+    ctx.fillStyle   = 'rgba(255, 190, 80, 0.14)';
+    ctx.lineWidth   = 1.5;
+    ctx.lineJoin    = 'round';
+    ctx.shadowColor = 'rgba(255, 190, 80, 0.9)';
+    ctx.shadowBlur  = 12;
+    ctx.beginPath();
+    ctx.moveTo(this.verts[0][0], this.verts[0][1]);
+    for (let i = 1; i < this.verts.length; i++)
+      ctx.lineTo(this.verts[i][0], this.verts[i][1]);
+    ctx.closePath();
+    ctx.fill();
     ctx.stroke();
     ctx.restore();
   }
@@ -283,11 +431,50 @@ class Particle {
   }
 }
 
+// ── Estela de la estrella fugaz ──────────────────────────────────────────────
+class TrailParticle {
+  constructor(x, y, dirX, dirY) {
+    this.x = x + rand(-2, 2);
+    this.y = y + rand(-2, 2);
+    const angle = Math.atan2(-dirY, -dirX) + rand(-0.45, 0.45);
+    const speed = rand(12, 38);
+    this.vx   = Math.cos(angle) * speed;
+    this.vy   = Math.sin(angle) * speed;
+    this.life = TRAIL_LIFE;
+    this.ttl  = TRAIL_LIFE;
+    this.dead = false;
+  }
+
+  update(dt) {
+    this.x += this.vx * dt;
+    this.y += this.vy * dt;
+    this.ttl -= dt;
+    if (this.ttl <= 0) this.dead = true;
+  }
+
+  draw() {
+    const alpha = this.ttl / this.life;
+    ctx.strokeStyle = `rgba(255, 200, 110, ${alpha.toFixed(2)})`;
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(this.x, this.y);
+    ctx.lineTo(this.x - this.vx * 0.06, this.y - this.vy * 0.06);
+    ctx.stroke();
+  }
+}
+
 // ── Estado del juego ──────────────────────────────────────────────────────────
 let ship, bullets, asteroids, particles, powerUps;
 let score, lives, level;
 let state;      // 'playing' | 'dead' | 'gameover'
 let deadTimer;
+let shootingStarTimer;   // segundos hasta la estrella fugaz, o null si no aparece
+
+// 50% de probabilidad de que haya estrella fugaz en el mapa; si la hay,
+// aparece en un momento aleatorio entre el segundo 10 y el 20.
+function rollShootingStarDelay() {
+  return Math.random() < 0.5 ? rand(10, 20) : null;
+}
 
 function spawnAsteroids(count) {
   const SAFE_DIST = 130;
@@ -311,15 +498,18 @@ function initGame() {
   lives  = 3;
   level  = 1;
   state  = 'playing';
+  shootingStarTimer = rollShootingStarDelay();
   spawnAsteroids(4);
 }
 
 function nextLevel() {
   level++;
+  asteroids = asteroids.filter(a => !a.isBonus);
   bullets   = [];
   particles = [];
   powerUps  = [];
   ship.reset();
+  shootingStarTimer = rollShootingStarDelay();
   spawnAsteroids(3 + level);
 }
 
@@ -354,6 +544,7 @@ function update(dt) {
     particles.forEach(p => p.update(dt));
     particles = particles.filter(p => !p.dead);
     asteroids.forEach(a => a.update(dt));
+    asteroids = asteroids.filter(a => !a.dead);
     powerUps.forEach(powerUp => powerUp.update(dt));
     powerUps = powerUps.filter(powerUp => !powerUp.dead);
     if (deadTimer <= 0) { state = 'playing'; ship.reset(); }
@@ -363,6 +554,15 @@ function update(dt) {
   // Disparar
   if (pressed('Space')) {
     bullets.push(...ship.tryShoot());
+  }
+
+  // Aparición de la estrella fugaz
+  if (shootingStarTimer !== null) {
+    shootingStarTimer -= dt;
+    if (shootingStarTimer <= 0) {
+      shootingStarTimer = null;
+      asteroids.push(new ShootingStar());
+    }
   }
 
   ship.update(dt);
@@ -382,10 +582,9 @@ function update(dt) {
       if (!a.dead && !b.dead && dist(b, a) < a.radius) {
         b.dead = true;
         a.dead = true;
-        score += POINTS[a.size];
-        explode(a.x, a.y, a.size * 5);
-        const speedChance = [0, 0.02, 0.015, 0.008][a.size];
-        if (Math.random() < speedChance)
+        score += a.points;
+        explode(a.x, a.y, a.explosionCount);
+        if (Math.random() < a.powerUpChance)
           powerUps.push(new SpeedPowerUp(a.x, a.y));
         newAsteroids.push(...a.split());
       }
@@ -398,7 +597,7 @@ function update(dt) {
   for (const powerUp of powerUps) {
     if (!powerUp.dead && dist(ship, powerUp) < ship.radius + powerUp.radius) {
       powerUp.dead = true;
-      ship.speedTimer = 5;
+      ship.speedTimer = SPEED_POWER_DURATION;
     }
   }
   powerUps = powerUps.filter(powerUp => !powerUp.dead);
@@ -413,8 +612,8 @@ function update(dt) {
     }
   }
 
-  // Nivel completado
-  if (asteroids.length === 0) nextLevel();
+  // Nivel completado (la estrella fugaz es solo un bonus)
+  if (asteroids.every(a => a.isBonus)) nextLevel();
 }
 
 // ── Draw ──────────────────────────────────────────────────────────────────────
@@ -461,7 +660,7 @@ function drawHUD() {
     ctx.lineWidth = 1;
     ctx.strokeRect(x, y, BAR_W, BAR_H);
     ctx.fillStyle = '#40e0ff';
-    ctx.fillRect(x, y, BAR_W * (ship.speedTimer / 5), BAR_H);
+    ctx.fillRect(x, y, BAR_W * (ship.speedTimer / SPEED_POWER_DURATION), BAR_H);
   }
 
 }
