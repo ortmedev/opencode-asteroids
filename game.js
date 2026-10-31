@@ -29,6 +29,86 @@ const dist  = (a, b)   => Math.hypot(a.x - b.x, a.y - b.y);
 const rand  = (min, max) => min + Math.random() * (max - min);
 const randInt = (min, max) => Math.floor(rand(min, max + 1));
 
+// ── Skins de la nave ─────────────────────────────────────────────────────────
+const SKIN_STORAGE_KEY = 'asteroids:skin';
+
+const SKINS = [
+  {
+    name: 'CLÁSICA',
+    shape: [[20, 0], [-12, -9], [-7, 0], [-12, 9]],
+    stroke: '#fff',
+    lineWidth: 1.5,
+    fill: null,
+    glow: null,
+    flame: { color: 'rgba(255, 130, 0, 0.85)', x: -8, spread: 4, length: [6, 14] },
+  },
+  {
+    name: 'NEÓN',
+    shape: [[22, 0], [-10, -7], [-5, 0], [-10, 7]],
+    stroke: '#40e0ff',
+    lineWidth: 1.5,
+    fill: 'rgba(64, 224, 255, 0.10)',
+    glow: { color: 'rgba(64, 224, 255, 0.9)', blur: 12 },
+    flame: { color: 'rgba(64, 224, 255, 0.85)', x: -7, spread: 3, length: [7, 16] },
+  },
+  {
+    name: 'ESPECTRO',
+    shape: [[18, 0], [2, -6], [-6, -13], [-10, -4], [-14, 0], [-10, 4], [-6, 13], [2, 6]],
+    stroke: '#c77dff',
+    lineWidth: 1.4,
+    fill: 'rgba(199, 125, 255, 0.16)',
+    glow: { color: 'rgba(199, 125, 255, 0.85)', blur: 14 },
+    flame: { color: 'rgba(199, 125, 255, 0.85)', x: -10, spread: 3, length: [6, 13] },
+  },
+  {
+    name: 'FÉNIX',
+    shape: [[22, 0], [6, -4], [-2, -14], [-5, -5], [-14, -8], [-9, 0], [-14, 8], [-5, 5], [-2, 14], [6, 4]],
+    stroke: '#ffb347',
+    lineWidth: 1.5,
+    fill: 'rgba(255, 179, 71, 0.12)',
+    glow: { color: 'rgba(255, 179, 71, 0.85)', blur: 10 },
+    flame: { color: 'rgba(255, 160, 40, 0.9)', x: -9, spread: 4, length: [8, 18] },
+  },
+];
+
+let currentSkin = loadSkin();
+let skinToast   = 0;
+
+function loadSkin() {
+  try {
+    const value = Number(localStorage.getItem(SKIN_STORAGE_KEY));
+    if (Number.isInteger(value) && value >= 0 && value < SKINS.length) return value;
+  } catch (_) { /* localStorage no disponible */ }
+  return 0;
+}
+
+function saveSkin() {
+  try {
+    localStorage.setItem(SKIN_STORAGE_KEY, String(currentSkin));
+  } catch (_) { /* localStorage no disponible */ }
+}
+
+const getSkin = () => SKINS[currentSkin];
+
+function cycleSkin() {
+  currentSkin = (currentSkin + 1) % SKINS.length;
+  saveSkin();
+}
+
+// Dibuja la silueta de la skin; el llamador define estilos y transformaciones.
+function drawShipShape(skin, scale = 1) {
+  const [nose, ...rest] = skin.shape;
+  ctx.beginPath();
+  ctx.moveTo(nose[0] * scale, nose[1] * scale);
+  for (const [x, y] of rest) ctx.lineTo(x * scale, y * scale);
+  ctx.closePath();
+  if (skin.fill) {
+    ctx.fillStyle = skin.fill;
+    ctx.fill();
+  }
+  ctx.stroke();
+}
+
 // ── Bullet ────────────────────────────────────────────────────────────────────
 class Bullet {
   constructor(x, y, angle) {
@@ -372,26 +452,27 @@ class Ship {
     ctx.save();
     ctx.translate(this.x, this.y);
     ctx.rotate(this.angle);
-    ctx.strokeStyle = '#fff';
-    ctx.lineWidth   = 1.5;
+    const skin = getSkin();
+    ctx.strokeStyle = skin.stroke;
+    ctx.lineWidth   = skin.lineWidth;
     ctx.lineJoin    = 'round';
+    if (skin.glow) {
+      ctx.shadowColor = skin.glow.color;
+      ctx.shadowBlur  = skin.glow.blur;
+    }
 
-    // Silueta clásica: triángulo con muesca trasera
-    ctx.beginPath();
-    ctx.moveTo( 20,  0);   // nariz
-    ctx.lineTo(-12, -9);   // ala izquierda
-    ctx.lineTo( -7,  0);   // muesca trasera
-    ctx.lineTo(-12,  9);   // ala derecha
-    ctx.closePath();
-    ctx.stroke();
+    // Silueta de la skin activa
+    drawShipShape(skin);
 
     // Llama del propulsor
     if (this.thrusting && Math.random() > 0.35) {
+      const flame = skin.flame;
+      const len   = rand(flame.length[0], flame.length[1]);
       ctx.beginPath();
-      ctx.moveTo(-8, -4);
-      ctx.lineTo(-8 - rand(6, 14), 0);
-      ctx.lineTo(-8,  4);
-      ctx.strokeStyle = 'rgba(255, 130, 0, 0.85)';
+      ctx.moveTo(flame.x, -flame.spread);
+      ctx.lineTo(flame.x - len, 0);
+      ctx.lineTo(flame.x,  flame.spread);
+      ctx.strokeStyle = flame.color;
       ctx.stroke();
     }
 
@@ -532,6 +613,12 @@ function killShip() {
 
 // ── Update ────────────────────────────────────────────────────────────────────
 function update(dt) {
+  if (pressed('KeyS')) {
+    cycleSkin();
+    skinToast = 1.6;
+  }
+  if (skinToast > 0) skinToast = Math.max(0, skinToast - dt);
+
   if (state === 'gameover') {
     if (pressed('Space')) initGame();
     particles.forEach(p => p.update(dt));
@@ -618,19 +705,14 @@ function update(dt) {
 
 // ── Draw ──────────────────────────────────────────────────────────────────────
 function drawLifeIcon(x, y) {
+  const skin = getSkin();
   ctx.save();
   ctx.translate(x, y);
   ctx.rotate(-Math.PI / 2);
-  ctx.strokeStyle = '#fff';
-  ctx.lineWidth   = 1.2;
+  ctx.strokeStyle = skin.stroke;
+  ctx.lineWidth   = Math.max(1, skin.lineWidth * 0.8);
   ctx.lineJoin    = 'round';
-  ctx.beginPath();
-  ctx.moveTo( 9,  0);
-  ctx.lineTo(-6, -5);
-  ctx.lineTo(-3,  0);
-  ctx.lineTo(-6,  5);
-  ctx.closePath();
-  ctx.stroke();
+  drawShipShape(skin, 0.45);
   ctx.restore();
 }
 
@@ -663,6 +745,15 @@ function drawHUD() {
     ctx.fillRect(x, y, BAR_W * (ship.speedTimer / SPEED_POWER_DURATION), BAR_H);
   }
 
+  const skin = getSkin();
+  ctx.textAlign = 'left';
+  ctx.font      = '12px monospace';
+  ctx.fillStyle = 'rgba(255,255,255,0.45)';
+  ctx.fillText('SKIN', 14, H - 14);
+  ctx.fillStyle = skin.stroke;
+  ctx.fillText(skin.name, 58, H - 14);
+  ctx.fillStyle = 'rgba(255,255,255,0.35)';
+  ctx.fillText('[S]', 58 + ctx.measureText(skin.name + '  ').width, H - 14);
 }
 
 function drawOverlay(title, sub) {
@@ -686,6 +777,18 @@ function draw() {
   ship.draw();
 
   drawHUD();
+
+  if (skinToast > 0) {
+    const skin = getSkin();
+    const alpha = Math.min(1, skinToast / 0.4);
+    ctx.save();
+    ctx.globalAlpha = alpha;
+    ctx.textAlign   = 'center';
+    ctx.font        = 'bold 18px monospace';
+    ctx.fillStyle   = skin.stroke;
+    ctx.fillText(`SKIN: ${skin.name}`, W / 2, H - 40);
+    ctx.restore();
+  }
 
   if (state === 'gameover')
     drawOverlay('GAME OVER', `PUNTAJE: ${score}   —   ESPACIO PARA REINICIAR`);
