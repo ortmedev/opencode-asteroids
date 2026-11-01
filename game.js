@@ -141,6 +141,9 @@ class Bullet {
 const SPEED_POWER_DURATION  = 12;   // segundos
 const TRIPLE_POWER_DURATION = 5;    // segundos
 const TRIPLE_SHOT_SPREAD    = 0.21; // radianes (±12°) entre balas del abanico
+const RAPID_FIRE_DURATION   = 8;    // segundos
+const SHOOT_COOLDOWN        = 0.2;  // segundos entre disparos
+const RAPID_FIRE_COOLDOWN   = SHOOT_COOLDOWN / 3; // 3x más rápido
 
 class SpeedPowerUp {
   constructor(x, y) {
@@ -232,6 +235,54 @@ class TripleShotPowerUp {
   }
 }
 
+// ── Power-up de cadencia rápida ──────────────────────────────────────────────
+class RapidFirePowerUp {
+  constructor(x, y) {
+    this.type = 'rapid';
+    this.x = x;
+    this.y = y;
+    this.radius = 13;
+    const angle = rand(0, Math.PI * 2);
+    const speed = rand(25, 55);
+    this.vx = Math.cos(angle) * speed;
+    this.vy = Math.sin(angle) * speed;
+    this.ttl = 10;
+    this.dead = false;
+  }
+
+  update(dt) {
+    this.x = wrap(this.x + this.vx * dt, W);
+    this.y = wrap(this.y + this.vy * dt, H);
+    this.ttl -= dt;
+    if (this.ttl <= 0) this.dead = true;
+  }
+
+  draw() {
+    ctx.save();
+    ctx.translate(this.x, this.y);
+    ctx.strokeStyle = '#ff4d4d';
+    ctx.fillStyle = 'rgba(255, 77, 77, 0.18)';
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.arc(0, 0, this.radius, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.stroke();
+
+    // Tres proyectiles con estelas de velocidad.
+    ctx.fillStyle = 'rgba(255, 77, 77, 0.9)';
+    for (const x of [-7, 0, 7]) {
+      ctx.beginPath();
+      ctx.arc(x, 5, 2.2, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.beginPath();
+      ctx.moveTo(x, -8);
+      ctx.lineTo(x, 0);
+      ctx.stroke();
+    }
+    ctx.restore();
+  }
+}
+
 // ── Power-up de escudo ───────────────────────────────────────────────────────
 const SHIELD_DURATION = 20;   // segundos
 const SHIELD_USES     = 2;    // impactos que puede absorber
@@ -301,6 +352,7 @@ class Asteroid {
     this.points = POINTS[size];
     this.speedChance    = [0, 0.02, 0.015, 0.008][size];
     this.tripleChance   = [0, 0.02, 0.015, 0.008][size];
+    this.rapidChance    = [0, 0.02, 0.015, 0.008][size];
     this.shieldChance   = [0, 0.015, 0.01, 0.005][size];
     this.explosionCount = size * 5;
     this.isBonus = false;
@@ -413,6 +465,7 @@ class ShootingStar extends Asteroid {
     this.points  = POINTS[1] * 10;
     this.speedChance    = 0;
     this.tripleChance   = 0;
+    this.rapidChance    = 0;
     this.shieldChance   = 0;
     this.explosionCount = 14;
 
@@ -510,6 +563,7 @@ class Ship {
     this.shootCooldown = 0;
     this.speedTimer    = 0;
     this.tripleTimer   = 0;
+    this.rapidTimer    = 0;
     this.shieldTimer   = 0;
     this.shieldCharges = 0;
     this.shieldFlash   = 0;
@@ -519,9 +573,14 @@ class Ship {
   update(dt) {
     if (this.dead) return;
     if (this.invincible    > 0) this.invincible    -= dt;
-    if (this.shootCooldown > 0) this.shootCooldown -= dt;
+    if (this.shootCooldown > 0) {
+      this.shootCooldown -= dt;
+      // Elimina el residuo de coma flotante para no perder un frame por disparo.
+      if (this.shootCooldown < 1e-6) this.shootCooldown = 0;
+    }
     if (this.speedTimer    > 0) this.speedTimer    = Math.max(0, this.speedTimer - dt);
     if (this.tripleTimer   > 0) this.tripleTimer   = Math.max(0, this.tripleTimer - dt);
+    if (this.rapidTimer    > 0) this.rapidTimer    = Math.max(0, this.rapidTimer - dt);
     if (this.shieldFlash   > 0) this.shieldFlash   = Math.max(0, this.shieldFlash - dt);
     if (this.shieldTimer   > 0) {
       this.shieldTimer = Math.max(0, this.shieldTimer - dt);
@@ -550,7 +609,7 @@ class Ship {
 
   tryShoot() {
     if (this.shootCooldown > 0 || this.dead) return [];
-    this.shootCooldown = 0.2;
+    this.shootCooldown = this.rapidTimer > 0 ? RAPID_FIRE_COOLDOWN : SHOOT_COOLDOWN;
     const NOSE = 21;
     const ox = this.x + Math.cos(this.angle) * NOSE;
     const oy = this.y + Math.sin(this.angle) * NOSE;
@@ -778,6 +837,7 @@ function killShip() {
   ship.dead = true;
   ship.speedTimer    = 0;
   ship.tripleTimer   = 0;
+  ship.rapidTimer    = 0;
   ship.shieldTimer   = 0;
   ship.shieldCharges = 0;
   ship.shieldFlash   = 0;
@@ -817,8 +877,8 @@ function update(dt) {
     return;
   }
 
-  // Disparar
-  if (pressed('Space')) {
+  // Disparar (con rapid-fire, mantener Espacio dispara automáticamente)
+  if (pressed('Space') || (ship.rapidTimer > 0 && keys['Space'])) {
     bullets.push(...ship.tryShoot());
   }
 
@@ -855,6 +915,8 @@ function update(dt) {
           powerUps.push(new SpeedPowerUp(a.x, a.y));
         if (Math.random() < a.tripleChance)
           powerUps.push(new TripleShotPowerUp(a.x, a.y));
+        if (Math.random() < a.rapidChance)
+          powerUps.push(new RapidFirePowerUp(a.x, a.y));
         if (Math.random() < a.shieldChance)
           powerUps.push(new ShieldPowerUp(a.x, a.y));
         newAsteroids.push(...a.split());
@@ -870,6 +932,8 @@ function update(dt) {
       powerUp.dead = true;
       if (powerUp.type === 'triple') {
         ship.tripleTimer = TRIPLE_POWER_DURATION;
+      } else if (powerUp.type === 'rapid') {
+        ship.rapidTimer = RAPID_FIRE_DURATION;
       } else if (powerUp.type === 'shield') {
         ship.activateShield();
       } else {
@@ -934,6 +998,10 @@ function drawHUD() {
   }
   if (ship.tripleTimer > 0) {
     drawPowerBar('TRIPLE', ship.tripleTimer, TRIPLE_POWER_DURATION, hudY, '#ff5ad0');
+    hudY += 24;
+  }
+  if (ship.rapidTimer > 0) {
+    drawPowerBar('RÁPIDO', ship.rapidTimer, RAPID_FIRE_DURATION, hudY, '#ff4d4d');
     hudY += 24;
   }
   if (ship.shieldTimer > 0 && ship.shieldCharges > 0) {
